@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""
-System Information Logger
-Logs system information including OS, CPU count, RAM, and active thread count.
+
 """
 
-import platform
+System Information Logger
+
+Logs system information including OS, CPU count, RAM, and active thread count.
+
+"""
+
+import time
 import os
+import platform
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
 import psutil
 
 
@@ -88,8 +96,8 @@ def get_system_info():
     }
 
 
-def main():
-    """Main function to log system information."""
+def log_system_info():
+    """Log system information."""
     info = get_system_info()
     cpu_usage = info['cpu_usage']
     
@@ -120,6 +128,78 @@ def main():
     print("=" * 50)
 
 
-if __name__ == "__main__":
-    main()
+def get_memory_mb() -> float:
+    """Return current process memory usage (RSS) in MB."""
+    process = psutil.Process(os.getpid())
+    rss_bytes = process.memory_info().rss
+    return rss_bytes / (1024 * 1024)
 
+
+def work_chunk(n_samples: int, seed: int) -> int:
+    """
+    Generate n_samples random points and count how many are inside the unit circle.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.random(n_samples)
+    y = rng.random(n_samples)
+    inside = (x * x + y * y) <= 1.0
+    return int(inside.sum())
+
+
+def run_pi_estimate(total_samples: int, num_threads: int):
+    samples_per_thread = total_samples // num_threads
+    remainder = total_samples % num_threads
+
+    t0 = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = []
+
+        for i in range(num_threads):
+            n = samples_per_thread + (1 if i < remainder else 0)
+            seed = 1234 + i
+            futures.append(executor.submit(work_chunk, n, seed))
+
+        hits = sum(f.result() for f in futures)
+
+    elapsed = time.perf_counter() - t0
+    pi_estimate = 4.0 * hits / total_samples
+
+    return pi_estimate, elapsed
+
+
+def benchmark():
+    sample_sizes = [5_000_000, 10_000_000, 20_000_000, 40_000_000, 50_000_000, 100_000_000]
+    thread_counts = [1, 2, 4, 8, 16]
+
+    print("\n=== Performance Benchmark: Monte Carlo π Estimation ===\n")
+    print("samples\tthreads\tpi_estimate\telapsed_s\tmem_before_MB\tmem_after_MB\tmem_delta_MB")
+    print("-" * 110)
+
+    for total_samples in sample_sizes:
+        for n_threads in thread_counts:
+
+            mem_before = get_memory_mb()
+            pi_est, elapsed = run_pi_estimate(total_samples, n_threads)
+            mem_after = get_memory_mb()
+            mem_delta = mem_after - mem_before
+
+            print(
+                f"{total_samples:,}\t"
+                f"{n_threads}\t"
+                f"{pi_est:.6f}\t"
+                f"{elapsed:.4f}\t\t"
+                f"{mem_before:8.2f}\t"
+                f"{mem_after:8.2f}\t"
+                f"{mem_delta:8.2f}"
+            )
+
+        print()  # blank line between sample groups
+
+
+if __name__ == "__main__":
+    # Log system information first
+    log_system_info()
+    
+    # Then run the benchmark
+    benchmark()
